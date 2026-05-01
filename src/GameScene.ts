@@ -83,7 +83,7 @@ export class GameScene extends Phaser.Scene {
   private cmdPts    = CMD_MAX;
   private gwActive  = false;
   private gwTimer   = 0;
-  private fireTarget: FireTarget = 'S2';
+  private fireTarget: FireTarget = 'S2'; // placeholder; overwritten at fire-spawn time
   private fireValue = 0;    // 0 … 100 (100 = burned)
 
   // ── Signals ─────────────────────────────────────────────────────────────────
