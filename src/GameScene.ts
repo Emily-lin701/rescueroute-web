@@ -170,8 +170,24 @@ export class GameScene extends Phaser.Scene {
     this.gwActive  = false;
     this.gwTimer   = 0;
     this.fireValue = 0;
-    this.signals.M2 = { phase: 'EW', transitioning: false, transTimer: 0, nextPhase: 'NS' };
-    this.signals.M3 = { phase: 'EW', transitioning: false, transTimer: 0, nextPhase: 'NS' };
+const randPhase = (): 'NS' | 'EW' => (Math.random() < 0.5 ? 'NS' : 'EW');
+
+const p2 = randPhase();
+const p3 = randPhase();
+
+this.signals.M2 = {
+  phase: p2,
+  transitioning: false,
+  transTimer: 0,
+  nextPhase: p2 === 'NS' ? 'EW' : 'NS',
+};
+
+this.signals.M3 = {
+  phase: p3,
+  transitioning: false,
+  transTimer: 0,
+  nextPhase: p3 === 'NS' ? 'EW' : 'NS',
+};
     this.truck      = { segIdx: 0, progress: 0, dispatched: false, arrived: false };
     this.truckPath  = [];
 
