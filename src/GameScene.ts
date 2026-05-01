@@ -170,8 +170,28 @@ export class GameScene extends Phaser.Scene {
     this.gwActive  = false;
     this.gwTimer   = 0;
     this.fireValue = 0;
-    this.signals.M2 = { phase: 'EW', transitioning: false, transTimer: 0, nextPhase: 'NS' };
-    this.signals.M3 = { phase: 'EW', transitioning: false, transTimer: 0, nextPhase: 'NS' };
+
+    // --- 修改這裡：隨機決定初始燈號 ---
+    const randomM2 = Math.random() < 0.5 ? 'EW' : 'NS';
+    const randomM3 = Math.random() < 0.5 ? 'EW' : 'NS';
+
+    // 設定 M2，並根據初始燈號自動設定下一個燈號是什麼
+    this.signals.M2 = { 
+        phase: randomM2, 
+        transitioning: false, 
+        transTimer: 0, 
+        nextPhase: randomM2 === 'EW' ? 'NS' : 'EW' 
+    };
+
+    // 設定 M3
+    this.signals.M3 = { 
+        phase: randomM3, 
+        transitioning: false, 
+        transTimer: 0, 
+        nextPhase: randomM3 === 'EW' ? 'NS' : 'EW' 
+    };
+    // --------------------------------
+
     this.truck      = { segIdx: 0, progress: 0, dispatched: false, arrived: false };
     this.truckPath  = [];
 
@@ -182,7 +202,7 @@ export class GameScene extends Phaser.Scene {
     this.overlaySub.setVisible(false);
     this.overlayCountdown.setVisible(false);
     this.dynGfx.clear();
-  }
+}
 
   // ─────────────────────────────────────────────────────────────────────────────
   //  UPDATE  (called every frame by Phaser)
