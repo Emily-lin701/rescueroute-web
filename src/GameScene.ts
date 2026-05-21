@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { NPCCar } from './types'; 
+import { NPCCar, Phase, GamePhase, FireTarget, TruckState } from './types'; 
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  遊戲平衡常數
@@ -8,13 +8,13 @@ const W = 1024;
 const H = 768;
 const HUD_W = 248;          
 
-const STOP_LINE     = 0.88; // 稍微提前停止線，留出十字路口中心淨空
-const TRUCK_SPEED   = 65;   // 消防車基礎時速
+const STOP_LINE     = 0.88; 
+const TRUCK_SPEED   = 65;   
 const GW_MULT       = 1.25;  
 const FIRE_SPAWN_T  = 3;    
 const FIRE_DEADLINE = 35;   
 const FIRE_GROWTH   = 12;   
-const ALLRED_DUR    = 0.4;  // 變燈全紅過渡期
+const ALLRED_DUR    = 0.4;  
 const CMD_REGEN     = 0.8;  
 const CMD_MAX       = 10;
 const GW_COST       = 3;    
@@ -23,8 +23,8 @@ const PENALTY_SEC   = 2;
 const BONUS_SAVE    = 600;
 const PENALTY_BURN  = 300;
 
-const CAR_SPAWN_T   = 1.2;  // 車流生成密集度
-const CAR_SPEED     = 0.14; // 私家車前進速度
+const CAR_SPAWN_T   = 1.2;  
+const CAR_SPEED     = 0.14; 
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  地圖路網資料 (雙向十字路口)
@@ -41,27 +41,22 @@ const NODES: Record<string, { x: number; y: number }> = {
 };
 
 const ROADS: Record<string, { from: string; to: string; mainline: boolean }> = {
-  // 主幹線 東向
   'R12_E': { from: 'M1', to: 'M2', mainline: true  },
   'R23_E': { from: 'M2', to: 'M3', mainline: true  },
   'R34_E': { from: 'M3', to: 'M4', mainline: true  },
-  // 主幹線 西向
   'R43_W': { from: 'M4', to: 'M3', mainline: true  },
   'R32_W': { from: 'M3', to: 'M2', mainline: true  },
   'R21_W': { from: 'M2', to: 'M1', mainline: true  },
-  // M2 十字路口 南北雙向支線
   'RN2_S': { from: 'N2', to: 'M2', mainline: false },
   'R2S_S': { from: 'M2', to: 'S2', mainline: false },
   'RS2_N': { from: 'S2', to: 'M2', mainline: false },
   'R2N_N': { from: 'M2', to: 'N2', mainline: false },
-  // M3 十字路口 南北雙向支線
   'RN3_S': { from: 'N3', to: 'M3', mainline: false },
   'R3S_S': { from: 'M3', to: 'S3', mainline: false },
   'RS3_N': { from: 'S3', to: 'M3', mainline: false },
   'R3N_N': { from: 'M3', to: 'N3', mainline: false },
 };
 
-// 進入路口的號誌燈通行判定規則
 const ENTRY_SIGNAL: Record<string, { junc: 'M2' | 'M3'; phase: 'NS' | 'EW' }> = {
   'R12_E→R23_E': { junc: 'M2', phase: 'EW' },
   'R23_E→R34_E': { junc: 'M3', phase: 'EW' },
@@ -69,7 +64,6 @@ const ENTRY_SIGNAL: Record<string, { junc: 'M2' | 'M3'; phase: 'NS' | 'EW' }> = 
   'R32_W→R21_W': { junc: 'M2', phase: 'EW' },
   'R12_E→R2S_S': { junc: 'M2', phase: 'EW' },
   'R23_E→R3S_S': { junc: 'M3', phase: 'EW' },
-  // 南北向橫向車流需要 NS 綠燈
   'RN2_S→R2S_S': { junc: 'M2', phase: 'NS' },
   'RS2_N→R2N_N': { junc: 'M2', phase: 'NS' },
   'RN3_S→R3S_S': { junc: 'M3', phase: 'NS' },
@@ -89,7 +83,6 @@ export class GameScene extends Phaser.Scene {
   private fireTarget: FireTarget = 'S2'; 
   private fireValue = 0;    
 
-  // 紅綠燈狀態控制（新增劫持鎖定功能）
   private signals = {
     M2: { phase: 'EW' as Phase, transitioning: false, transTimer: 0, nextPhase: 'NS' as Phase, lockedByTruck: false, originalPhase: 'EW' as Phase },
     M3: { phase: 'EW' as Phase, transitioning: false, transTimer: 0, nextPhase: 'NS' as Phase, lockedByTruck: false, originalPhase: 'EW' as Phase },
@@ -101,7 +94,6 @@ export class GameScene extends Phaser.Scene {
   private npcCars: NPCCar[] = [];
   private trafficEvent: Phaser.Time.TimerEvent | null = null;
 
-  // 鍵盤輸入
   private k1!: Phaser.Input.Keyboard.Key;
   private k2!: Phaser.Input.Keyboard.Key;
   private kG!: Phaser.Input.Keyboard.Key;
@@ -111,13 +103,11 @@ export class GameScene extends Phaser.Scene {
   private kGPrev = false;
   private kEPrev = false;
 
-  // 畫筆圖層
   private mapGfx!:     Phaser.GameObjects.Graphics; 
   private dynGfx!:     Phaser.GameObjects.Graphics; 
   private hudGfx!:     Phaser.GameObjects.Graphics; 
   private overlayGfx!: Phaser.GameObjects.Graphics; 
 
-  // UI 文字
   private txtTime!:  Phaser.GameObjects.Text;
   private txtScore!: Phaser.GameObjects.Text;
   private txtCmd!:   Phaser.GameObjects.Text;
@@ -158,7 +148,6 @@ export class GameScene extends Phaser.Scene {
     this.initTrafficSpawn();
   }
 
-  // 💡 【多向車流生成】模擬真實路網四通八達的車流
   private initTrafficSpawn() {
     if (this.trafficEvent) this.trafficEvent.remove();
 
@@ -172,7 +161,7 @@ export class GameScene extends Phaser.Scene {
         
         if (startNode) {
           const isMainline = road.mainline;
-          const carColor = isMainline ? 0x4477aa : 0xaa7744; // 東西向藍色，南北向土黃色
+          const carColor = isMainline ? 0x4477aa : 0xaa7744; 
           const carRect = this.add.rectangle(startNode.x, startNode.y, 22, 13, carColor);
           carRect.setDepth(5); 
 
@@ -241,7 +230,6 @@ export class GameScene extends Phaser.Scene {
       if (this.gwTimer <= 0) { this.gwActive = false; this.gwTimer = 0; }
     }
 
-    // 處理號誌黃燈/全紅輪替
     for (const key of ['M2', 'M3'] as const) {
       const s = this.signals[key];
       if (s.transitioning) {
@@ -273,7 +261,6 @@ export class GameScene extends Phaser.Scene {
     this.handleInput();
     if (this.gPhase === 'dispatched') this.updateTruck(dt);
 
-    // 💡 融合雙向道排隊、避讓、座標偏移算法
     this.updateTraffic(delta);
 
     this.dynGfx.clear();
@@ -283,9 +270,8 @@ export class GameScene extends Phaser.Scene {
     this.drawHUD();
   }
 
-  // 💡 【核心融合】多車道排隊 + 消防車後方逼近避讓算法
   private updateTraffic(delta: number) {
-    if (!this.npcCars) return;
+    if (!this.npcCars || this.npcCars.length === 0) return;
 
     const activeRoadIds = Array.from(new Set(this.npcCars.map(car => car.currentRoadId)));
 
@@ -296,11 +282,9 @@ export class GameScene extends Phaser.Scene {
       const road = ROADS[roadId];
       if (!road) return;
 
-      // 偵測消防車是否也在當前這條車道上
       const isTruckOnThisRoad = this.truck.dispatched && !this.truck.arrived && this.truckPath[this.truck.segIdx] === roadId;
       const truckProgress = this.truck.progress;
 
-      // 檢查前方路口是否為紅燈
       let isRed = false;
       const nextPossibleSegs = Object.keys(ENTRY_SIGNAL).filter(key => key.startsWith(`${roadId}→`));
       if (nextPossibleSegs.length > 0) {
@@ -314,12 +298,10 @@ export class GameScene extends Phaser.Scene {
         const car = carsOnRoad[i];
         let isYielding = false; 
 
-        // 🔴【避讓機制】若消防車從後方逼近 (距離小於 0.18)，觸發避讓
         if (isTruckOnThisRoad && truckProgress < car.progress && (car.progress - truckProgress) < 0.18) {
           isYielding = true;
-          car.speed = 0; // 靠邊減速停下
+          car.speed = 0; 
         } else {
-          // 🟢 正常排隊與紅燈煞車邏輯
           if (i === 0) {
             if (isRed && car.progress >= STOP_LINE) car.speed = 0;
             else car.speed = car.baseSpeed;
@@ -333,14 +315,12 @@ export class GameScene extends Phaser.Scene {
         car.progress += car.speed * (delta / 1000);
         if (car.progress > STOP_LINE && car.speed === 0 && !isYielding) car.progress = STOP_LINE;
 
-        // 車子開到終點則回收
         if (car.progress >= 1.0) {
           car.sprite.destroy();
           this.npcCars = this.npcCars.filter(c => c !== car);
           continue;
         }
 
-        // 🛣️【雙向道座標平移與避讓偏移】
         const start = NODES[road.from];
         const end = NODES[road.to];
         if (start && end) {
@@ -348,7 +328,6 @@ export class GameScene extends Phaser.Scene {
           let by = start.y + (end.y - start.y) * car.progress;
 
           const angle = Math.atan2(end.y - start.y, end.x - start.x);
-          // 正常靠右行駛偏移 7 像素；避讓時深深切入路肩 18 像素，把路中央留給消防車！
           const sideOffset = isYielding ? 18 : 7;
 
           car.sprite.x = bx + Math.sin(angle) * sideOffset;
@@ -359,14 +338,12 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  // 💡 【智慧號誌與安全防撞】劫持號誌、過彎減速、過後補償復原
   private updateTruck(dt: number) {
-    if (this.truck.arrived) return;
+    if (this.truck.arrived || this.truckPath.length === 0) return;
 
     const seg     = this.truckPath[this.truck.segIdx];
     const nextSeg = this.truck.segIdx + 1 < this.truckPath.length ? this.truckPath[this.truck.segIdx + 1] : null;
 
-    // 📢 智慧劫持號誌（搶燈 / 綠燈延長）
     if (nextSeg) {
       const key = `${seg}→${nextSeg}`;
       const req = ENTRY_SIGNAL[key]; 
@@ -376,7 +353,6 @@ export class GameScene extends Phaser.Scene {
           s.lockedByTruck = true;
           s.originalPhase = s.phase;
         }
-        // 如果目前不是消防車要的綠燈，強制截斷切換
         if (s.phase !== req.phase && !s.transitioning) {
           s.transitioning = true;
           s.transTimer    = 0;
@@ -391,9 +367,8 @@ export class GameScene extends Phaser.Scene {
     if (!blocked) {
       let currentSpeed = this.getTruckSpeed(seg);
       
-      // ⚠️【路口小心左右】接近停止線或剛過路口前 15% 路程，強制煞車減速防撞
       if ((this.truck.progress >= 0.82 && nextSeg !== null) || (this.truck.progress <= 0.15 && this.truck.segIdx > 0)) {
-        currentSpeed *= 0.35; // 降速至 35% 小心通過
+        currentSpeed *= 0.35; 
       }
 
       const len = this.segLen(seg);
@@ -404,19 +379,16 @@ export class GameScene extends Phaser.Scene {
           this.truck.segIdx++;
           this.truck.progress = 0;
 
-          // 🔄【離開路口復原與補償】
           const oldKey = `${seg}→${nextSeg}`;
           const oldReq = ENTRY_SIGNAL[oldKey];
           if (oldReq) {
             const s = this.signals[oldReq.junc];
-            s.lockedByTruck = false; // 解除鎖定
+            s.lockedByTruck = false; 
             s.transitioning = true;
             s.transTimer    = 0;
-            // 自動補償變燈給對向車流
             s.nextPhase     = oldReq.phase === 'EW' ? 'NS' : 'EW';
           }
         } else {
-          // 成功抵達火場
           this.truck.progress = 1.0;
           this.truck.arrived  = true;
           this.score += BONUS_SAVE;
@@ -442,14 +414,16 @@ export class GameScene extends Phaser.Scene {
 
   private segLen(segId: string): number {
     const r = ROADS[segId];
+    if (!r) return 1;
     const a = NODES[r.from], b = NODES[r.to];
     return Math.hypot(b.x - a.x, b.y - a.y);
   }
 
   private truckPos(): { x: number; y: number; angle: number } {
-    if (!this.truck.dispatched) return { x: NODES.M1.x, y: NODES.M1.y, angle: 0 };
+    if (!this.truck.dispatched || this.truckPath.length === 0) return { x: NODES.M1.x, y: NODES.M1.y, angle: 0 };
     const seg  = this.truckPath[this.truck.segIdx];
     const road = ROADS[seg];
+    if (!road) return { x: NODES.M1.x, y: NODES.M1.y, angle: 0 };
     const a    = NODES[road.from], b = NODES[road.to];
     const t    = Math.min(this.truck.progress, 1);
     return {
@@ -473,7 +447,6 @@ export class GameScene extends Phaser.Scene {
 
   private toggleSignal(junc: 'M2' | 'M3') {
     const s = this.signals[junc];
-    // 📢 防呆機制：被消防車鎖定中，玩家不能手動切換號誌
     if (s.transitioning || s.lockedByTruck) return;
     s.transitioning = true; s.transTimer = 0;
     s.nextPhase     = s.phase === 'NS' ? 'EW' : 'NS';
@@ -491,9 +464,9 @@ export class GameScene extends Phaser.Scene {
     this.truckPath      = this.fireTarget === 'S2' ? ['R12_E', 'R2S_S'] : ['R12_E', 'R23_E', 'R3S_S'];
     this.truck.segIdx   = 0;
     this.truck.progress = 0;
+    this.truck.arrived  = false;
   }
 
-  // 🎨 繪製具有分向黃線的真實馬路
   private drawStaticMap() {
     const g = this.mapGfx; g.clear();
     g.fillStyle(0x0a1220, 1); g.fillRect(0, 0, W, H);
@@ -501,17 +474,15 @@ export class GameScene extends Phaser.Scene {
     g.fillStyle(0x162035, 1);
     for (let x = 16; x < W; x += 40) for (let y = 16; y < H; y += 40) g.fillCircle(x, y, 1.2);
 
-    // 畫出厚實的瀝青路面與中央雙黃實線
     for (const road of Object.values(ROADS)) {
       const a = NODES[road.from], b = NODES[road.to];
-      g.lineStyle(16, 0x2e2e3d, 1); // 寬馬路底色
+      g.lineStyle(16, 0x2e2e3d, 1); 
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.strokePath();
       
-      g.lineStyle(1, 0xffbb00, 0.7); // 中央黃線
+      g.lineStyle(1, 0xffbb00, 0.7); 
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.strokePath();
     }
 
-    // 繪製圓環十字路口底座
     for (const [id, node] of Object.entries(NODES)) {
       const isCtrl = ['M2', 'M3'].includes(id);
       g.fillStyle(isCtrl ? 0x1a3554 : 0x102040, 1);
@@ -572,8 +543,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawTruck() {
+    if (this.truckPath.length === 0) return;
     const g = this.dynGfx; const { x, y, angle } = this.truckPos();
-    // 消防車維持行駛在雙向道的路中央（往右偏移 7 像素）
     const rx = x + Math.sin(angle) * 7;
     const ry = y - Math.cos(angle) * 7;
 
@@ -582,7 +553,7 @@ export class GameScene extends Phaser.Scene {
     g.translate(rx, ry);
     g.rotate(angle);
     g.fillRect(-13, -6.5, 26, 13);
-    g.fillStyle(0x00bfff, 1); // 警示燈閃爍
+    g.fillStyle(0x00bfff, 1); 
     if (Math.floor(this.gt * 9) % 2 === 0) g.fillCircle(5, 0, 4);
     g.restore();
   }
@@ -665,7 +636,6 @@ export class GameScene extends Phaser.Scene {
     else if (this.gPhase === 'fire_spawned') { this.txtFire.setText(`🔥 Fire @ ${this.fireTarget}`).setColor('#ff9944'); this.txtHint.setText('▶ Press ENTER to dispatch truck!').setColor('#ffee44'); }
     else if (this.gPhase === 'dispatched') { this.txtFire.setText(`🔥 Fire @ ${this.fireTarget}`).setColor('#ff6622'); this.txtHint.setText(''); }
 
-    // HUD 上即時提示紅綠燈目前是否正被消防車接管中
     const m2Status = this.signals.M2.lockedByTruck ? ' 🚒 PRIORITY' : (this.signals.M2.transitioning ? ' (ALL-RED)' : '');
     const m3Status = this.signals.M3.lockedByTruck ? ' 🚒 PRIORITY' : (this.signals.M3.transitioning ? ' (ALL-RED)' : '');
     this.txtM2.setText(`[1] M2 — ${this.signals.M2.phase}${m2Status}`);
