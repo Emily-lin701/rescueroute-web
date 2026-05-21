@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { NPCCar } from '../types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Constants
@@ -75,7 +76,8 @@ interface TruckState {
 //  GameScene
 // ─────────────────────────────────────────────────────────────────────────────
 export class GameScene extends Phaser.Scene {
-
+private npcCars: NPCCar[] = [];
+  
   // ── Game state ─────────────────────────────────────────────────────────────
   private gPhase: GamePhase = 'waiting';
   private gt        = 0;    // elapsed game time (seconds)
@@ -143,7 +145,7 @@ export class GameScene extends Phaser.Scene {
   // ─────────────────────────────────────────────────────────────────────────────
   //  CREATE
   // ─────────────────────────────────────────────────────────────────────────────
-  create() {
+ create() {
     // Layer order (depth): mapGfx=0, static labels=1, dynGfx=2, hudGfx=3,
     //                       HUD texts=4, overlayGfx=10, overlay texts=11
     this.mapGfx     = this.add.graphics().setDepth(0);
@@ -157,6 +159,37 @@ export class GameScene extends Phaser.Scene {
     this.buildOverlayTexts();
     this.setupInput();
     this.initGame();
+
+    // 💡 呼叫產生一般車流的計時器
+    this.initTrafficSpawn();
+  }
+
+  // 💡 產生一般車流的具體實作 (改用內建灰色方塊)
+  private initTrafficSpawn() {
+    this.time.addEvent({
+      delay: 1500, // 每 1.5 秒生出一輛私家車
+      callback: () => {
+        // 抓取 M1 的座標
+        const startNode = (this as any).nodes?.['M1'];
+        const startX = startNode ? startNode.x : 300;
+        const startY = startNode ? startNode.y : 384;
+        
+        // 畫一個 16x10 的灰色小方塊代表私家車
+        const carRect = this.add.rectangle(startX, startY, 16, 10, 0x888888);
+        carRect.setDepth(5); // 確保在最上層看得見
+
+        const newCar: NPCCar = {
+          sprite: carRect,
+          currentRoadId: 'R12', 
+          progress: 0,
+          speed: 0.15,          // 每秒前進 15% 的路程
+          baseSpeed: 0.15
+        };
+        
+        this.npcCars.push(newCar);
+      },
+      loop: true
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -218,6 +251,56 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    // 💡 執行私家車系統的移動與排隊更新
+    this.updateTraffic(delta);
+  }
+
+  // 💡 私家車移動與紅燈排隊的具體實作
+  private updateTraffic(delta: number) {
+    // 找出所有在 R12 道路上的私家車，並依照進度從大到小排序
+    const r12Cars = this.npcCars.filter(car => car.currentRoadId === 'R12')
+                                .sort((a, b) => b.progress - a.progress);
+
+    // 檢查 M2 目前是不是紅燈（當號誌為 'EW' 時，代表東西向綠燈，南北主幹道就是紅燈）
+    const isM2Red = (this as any).signals?.M2?.phase === 'EW'; 
+
+    for (let i = 0; i < r12Cars.length; i++) {
+        const car = r12Cars[i];
+
+        if (i === 0) {
+            // -- 最前面的一台車 --
+            if (isM2Red && car.progress >= 0.92) {
+                car.speed = 0; // 紅燈停下
+            } else {
+                car.speed = car.baseSpeed; // 綠燈正常走
+            }
+        } else {
+            // -- 後面的車（排隊回堵） --
+            const frontCar = r12Cars[i - 1];
+            if (frontCar.progress - car.progress < 0.05 && frontCar.speed === 0) {
+                car.speed = 0; // 前車停，我也停
+            } else {
+                car.speed = car.baseSpeed;
+            }
+        }
+
+        // 更新進度
+        car.progress += car.speed * (delta / 1000);
+        if (car.progress > 0.92 && car.speed === 0) car.progress = 0.92;
+        if (car.progress > 1.0) car.progress = 1.0;
+
+        // 讓灰色方塊在畫面上動起來
+        const road = (this as any).roads?.['R12'];
+        if (road) {
+            const start = (this as any).nodes[road.start];
+            const end = (this as any).nodes[road.end];
+            if (start && end) {
+                car.sprite.x = start.x + (end.x - start.x) * car.progress;
+                car.sprite.y = start.y + (end.y - start.y) * car.progress;
+            }
+        }
+    }
+  }
     // ── Elapsed time & score penalty ────────────────────────────────────────
     this.gt    += dt;
     this.score -= PENALTY_SEC * dt;
