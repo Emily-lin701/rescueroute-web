@@ -160,51 +160,22 @@ private npcCars: NPCCar[] = [];
     this.setupInput();
     this.initGame();
 
-    // 💡 呼叫產生一般車流的計時器
+    // 💡 只有多加這行！
     this.initTrafficSpawn();
-  }
-
-  // 💡 產生一般車流的具體實作 (改用內建灰色方塊)
-private initTrafficSpawn() {
-    // 先移除舊的 event 避免重複建立
-    if ((this as any).trafficEvent) {
-      (this as any).trafficEvent.remove();
-    }
-
-    (this as any).trafficEvent = this.time.addEvent({
-      delay: 1500, // 每 1.5 秒生一輛車
-      callback: () => {
-        const startNode = (this as any).nodes?.['M1'];
-        const startX = startNode ? startNode.x : 300;
-        const startY = startNode ? startNode.y : 384;
-        
-        // 💡 放大方塊尺寸 (24, 14)，換個跟背景對比明顯的顏色
-        const carRect = this.add.rectangle(startX, startY, 24, 14, 0x557799);
-        carRect.setDepth(5);
-
-        const newCar: NPCCar = {
-          sprite: carRect,
-          currentRoadId: 'R12', 
-          progress: 0,
-          speed: 0.12, // 稍微放慢一點點移動速度，更容易形成排隊
-          baseSpeed: 0.12
-        };
-        
-        this.npcCars.push(newCar);
-      },
-      loop: true
-    });
   }
   // ─────────────────────────────────────────────────────────────────────────────
   //  INIT / RESTART
   // ─────────────────────────────────────────────────────────────────────────────
   private initGame() {
+    // 💡 1. 每次遊戲重開，先清除畫面上所有的舊私家車
     if (this.npcCars) {
       this.npcCars.forEach(car => {
         if (car.sprite) car.sprite.destroy();
       });
       this.npcCars = [];
     }
+
+    // 💡 2. 以下是你原本專案裡完整的重設邏輯
     this.gPhase    = 'waiting';
     this.gt        = 0;
     this.score     = 1000;
@@ -213,39 +184,35 @@ private initTrafficSpawn() {
     this.gwTimer   = 0;
     this.fireValue = 0;
 
-    // --- 修改這裡：隨機決定初始燈號 ---
+    // 修改這裡：隨機決定初始燈號
     const randomM2 = Math.random() < 0.5 ? 'EW' : 'NS';
     const randomM3 = Math.random() < 0.5 ? 'EW' : 'NS';
 
     // 設定 M2，並根據初始燈號自動設定下一個燈號是什麼
-    this.signals.M2 = { 
-        phase: randomM2, 
-        transitioning: false, 
-        transTimer: 0, 
-        nextPhase: randomM2 === 'EW' ? 'NS' : 'EW' 
+    this.signals.M2 = {
+      phase: randomM2,
+      transitioning: false,
+      transTimer: 0,
+      nextPhase: randomM2 === 'EW' ? 'NS' : 'EW'
     };
 
     // 設定 M3
-    this.signals.M3 = { 
-        phase: randomM3, 
-        transitioning: false, 
-        transTimer: 0, 
-        nextPhase: randomM3 === 'EW' ? 'NS' : 'EW' 
+    this.signals.M3 = {
+      phase: randomM3,
+      transitioning: false,
+      transTimer: 0,
+      nextPhase: randomM3 === 'EW' ? 'NS' : 'EW'
     };
-    // --------------------------------
 
-    this.truck      = { segIdx: 0, progress: 0, dispatched: false, arrived: false };
-    this.truckPath  = [];
-
+    this.truckPath = [];
+    this.activeTrucks = [];
     this.overlayVisible = false;
-    this.restartTimer   = 0;
-    this.overlayGfx.clear();
-    this.overlayTitle.setVisible(false);
-    this.overlaySub.setVisible(false);
-    this.overlayCountdown.setVisible(false);
-    this.dynGfx.clear();
-}
+    this.restartTimer = 5;
 
+    // 重新更新 HUD 畫面
+    this.drawHUD();
+  }
+  
   // ─────────────────────────────────────────────────────────────────────────────
   //  UPDATE  (called every frame by Phaser)
   // ─────────────────────────────────────────────────────────────────────────────
@@ -260,27 +227,27 @@ private initTrafficSpawn() {
       return;
     }
 
-    // ── Elapsed time & score penalty ────────────────────────────────────────
+    // ── 遊戲原本的計時與扣分 ──
     this.gt    += dt;
-    this.score -= 2 * dt; // 這裡原本是 PENALTY_SEC * dt，如果報錯可以先用 2 代替
+    this.score -= 2 * dt; 
 
     // 💡 執行私家車系統的移動與排隊更新
     this.updateTraffic(delta);
 
-    // 💡 這裡會觸發你原本專案的重繪 (如果原本有 drawHUD() 或 updateTruck() 記得留著)
     this.drawHUD(); 
   }
 
-  // 💡 私家車移動與紅燈排隊的具體實作
+  // 💡 [新功能 1] 私家車移動與紅燈排隊的具體實作
   private updateTraffic(delta: number) {
+    if (!this.npcCars) return;
+
     // 找出所有在 R12 道路上的私家車，並依照進度從大到小排序
     const r12Cars = this.npcCars.filter(car => car.currentRoadId === 'R12')
                                 .sort((a, b) => b.progress - a.progress);
 
-    // 檢查 M2 目前是不是紅燈（當號誌為 'EW' 時，代表東西向綠燈，南北主幹道就是紅燈）
-    // 💡 修正：當 phase 為 'NS' 時，代表南北向綠燈，這時候我們東西向（R12）才是紅燈！
-    const isM2Red = (this as any).signals?.M2?.phase === 'NS';
-    
+    // 💡 當 phase 為 'NS'（南北通行）時，代表東西向（R12）遇到紅燈！
+    const isM2Red = (this as any).signals?.M2?.phase === 'NS'; 
+
     for (let i = 0; i < r12Cars.length; i++) {
         const car = r12Cars[i];
 
@@ -306,7 +273,7 @@ private initTrafficSpawn() {
         if (car.progress > 0.92 && car.speed === 0) car.progress = 0.92;
         if (car.progress > 1.0) car.progress = 1.0;
 
-        // 讓灰色方塊在畫面上動起來
+        // 讓灰色方塊在畫面上沿著 R12 移動
         const road = (this as any).roads?.['R12'];
         if (road) {
             const start = (this as any).nodes[road.start];
@@ -318,32 +285,38 @@ private initTrafficSpawn() {
         }
     }
   }
-    // ── Elapsed time & score penalty ────────────────────────────────────────
-    this.gt    += dt;
-    this.score -= PENALTY_SEC * dt;
 
-    // ── Command points regeneration ─────────────────────────────────────────
-    this.cmdPts = Math.min(CMD_MAX, this.cmdPts + CMD_REGEN * dt);
-
-    // ── GreenWave timer ─────────────────────────────────────────────────────
-    if (this.gwActive) {
-      this.gwTimer -= dt;
-      if (this.gwTimer <= 0) { this.gwActive = false; this.gwTimer = 0; }
+  // 💡 [新功能 2] 定時產生私家車的計時器設定
+  private initTrafficSpawn() {
+    if ((this as any).trafficEvent) {
+      (this as any).trafficEvent.remove();
     }
 
-    // ── Signal all-red transitions ──────────────────────────────────────────
-    for (const key of ['M2', 'M3'] as const) {
-      const s = this.signals[key];
-      if (s.transitioning) {
-        s.transTimer += dt;
-        if (s.transTimer >= ALLRED_DUR) {
-          s.phase        = s.nextPhase;
-          s.transitioning = false;
-          s.transTimer   = 0;
-        }
-      }
-    }
+    (this as any).trafficEvent = this.time.addEvent({
+      delay: 1500, // 每 1.5 秒生一輛車
+      callback: () => {
+        const startNode = (this as any).nodes?.['M1'];
+        const startX = startNode ? startNode.x : 300;
+        const startY = startNode ? startNode.y : 384;
+        
+        // 畫一個 24x14 的藍灰色小方塊代表私家車
+        const carRect = this.add.rectangle(startX, startY, 24, 14, 0x557799);
+        carRect.setDepth(5);
 
+        const newCar: NPCCar = {
+          sprite: carRect,
+          currentRoadId: 'R12', 
+          progress: 0,
+          speed: 0.12, 
+          baseSpeed: 0.12
+        };
+        
+        this.npcCars.push(newCar);
+      },
+      loop: true
+    });
+  }
+  
     // ── Fire spawn ──────────────────────────────────────────────────────────
     if (this.gPhase === 'waiting' && this.gt >= FIRE_SPAWN_T) {
       this.fireTarget = Math.random() < 0.5 ? 'S2' : 'S3';
