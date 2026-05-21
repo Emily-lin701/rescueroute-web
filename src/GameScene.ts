@@ -165,25 +165,29 @@ private npcCars: NPCCar[] = [];
   }
 
   // 💡 產生一般車流的具體實作 (改用內建灰色方塊)
-  private initTrafficSpawn() {
-    this.time.addEvent({
-      delay: 1500, // 每 1.5 秒生出一輛私家車
+private initTrafficSpawn() {
+    // 先移除舊的 event 避免重複建立
+    if ((this as any).trafficEvent) {
+      (this as any).trafficEvent.remove();
+    }
+
+    (this as any).trafficEvent = this.time.addEvent({
+      delay: 1500, // 每 1.5 秒生一輛車
       callback: () => {
-        // 抓取 M1 的座標
         const startNode = (this as any).nodes?.['M1'];
         const startX = startNode ? startNode.x : 300;
         const startY = startNode ? startNode.y : 384;
         
-        // 畫一個 16x10 的灰色小方塊代表私家車
-        const carRect = this.add.rectangle(startX, startY, 16, 10, 0x888888);
-        carRect.setDepth(5); // 確保在最上層看得見
+        // 💡 放大方塊尺寸 (24, 14)，換個跟背景對比明顯的顏色
+        const carRect = this.add.rectangle(startX, startY, 24, 14, 0x557799);
+        carRect.setDepth(5);
 
         const newCar: NPCCar = {
           sprite: carRect,
           currentRoadId: 'R12', 
           progress: 0,
-          speed: 0.15,          // 每秒前進 15% 的路程
-          baseSpeed: 0.15
+          speed: 0.12, // 稍微放慢一點點移動速度，更容易形成排隊
+          baseSpeed: 0.12
         };
         
         this.npcCars.push(newCar);
@@ -191,11 +195,16 @@ private npcCars: NPCCar[] = [];
       loop: true
     });
   }
-
   // ─────────────────────────────────────────────────────────────────────────────
   //  INIT / RESTART
   // ─────────────────────────────────────────────────────────────────────────────
   private initGame() {
+    if (this.npcCars) {
+      this.npcCars.forEach(car => {
+        if (car.sprite) car.sprite.destroy();
+      });
+      this.npcCars = [];
+    }
     this.gPhase    = 'waiting';
     this.gt        = 0;
     this.score     = 1000;
@@ -269,8 +278,9 @@ private npcCars: NPCCar[] = [];
                                 .sort((a, b) => b.progress - a.progress);
 
     // 檢查 M2 目前是不是紅燈（當號誌為 'EW' 時，代表東西向綠燈，南北主幹道就是紅燈）
-    const isM2Red = (this as any).signals?.M2?.phase === 'EW'; 
-
+    // 💡 修正：當 phase 為 'NS' 時，代表南北向綠燈，這時候我們東西向（R12）才是紅燈！
+    const isM2Red = (this as any).signals?.M2?.phase === 'NS';
+    
     for (let i = 0; i < r12Cars.length; i++) {
         const car = r12Cars[i];
 
