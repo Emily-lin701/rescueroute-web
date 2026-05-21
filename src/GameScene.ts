@@ -271,73 +271,91 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateTraffic(delta: number) {
-    if (!this.npcCars || this.npcCars.length === 0) return;
+  if (!this.npcCars || this.npcCars.length === 0) return;
 
-    const activeRoadIds = Array.from(new Set(this.npcCars.map(car => car.currentRoadId)));
+  // 1. 先找出目前有哪些道路上有車
+  const activeRoadIds = Array.from(new Set(this.npcCars.map(car => car.currentRoadId)));
+  
+  // 用來記錄這一幀有哪些車子該被銷毀，避免在迴圈中直接更動陣列
+  const carsToDestroy: NPCCar[] = [];
 
-    activeRoadIds.forEach(roadId => {
-      const carsOnRoad = this.npcCars.filter(car => car.currentRoadId === roadId)
-                                     .sort((a, b) => b.progress - a.progress);
+  activeRoadIds.forEach(roadId => {
+    // 篩選出該車道的車，並由遠到近排序
+    const carsOnRoad = this.npcCars.filter(car => car.currentRoadId === roadId)
+                                   .sort((a, b) => b.progress - a.progress);
 
-      const road = ROADS[roadId];
-      if (!road) return;
+    const road = ROADS[roadId];
+    if (!road) return;
 
-      const isTruckOnThisRoad = this.truck.dispatched && !this.truck.arrived && this.truckPath[this.truck.segIdx] === roadId;
-      const truckProgress = this.truck.progress;
+    const isTruckOnThisRoad = this.truck.dispatched && !this.truck.arrived && this.truckPath[this.truck.segIdx] === roadId;
+    const truckProgress = this.truck.progress;
 
-      let isRed = false;
-      const nextPossibleSegs = Object.keys(ENTRY_SIGNAL).filter(key => key.startsWith(`${roadId}→`));
-      if (nextPossibleSegs.length > 0) {
-        const nextSegKey = nextPossibleSegs[0];
-        const req = ENTRY_SIGNAL[nextSegKey];
-        const s = this.signals[req.junc];
-        isRed = s.transitioning || s.phase !== req.phase;
-      }
+    // 紅燈判定
+    let isRed = false;
+    const nextPossibleSegs = Object.keys(ENTRY_SIGNAL).filter(key => key.startsWith(`${roadId}→`));
+    if (nextPossibleSegs.length > 0) {
+      const nextSegKey = nextPossibleSegs[0];
+      const req = ENTRY_SIGNAL[nextSegKey];
+      const s = this.signals[req.junc];
+      isRed = s.transitioning || s.phase !== req.phase;
+    }
 
-      for (let i = 0; i < carsOnRoad.length; i++) {
-        const car = carsOnRoad[i];
-        let isYielding = false; 
+    for (let i = 0; i < carsOnRoad.length; i++) {
+      const car = carsOnRoad[i];
+      let isYielding = false; 
 
-        if (isTruckOnThisRoad && truckProgress < car.progress && (car.progress - truckProgress) < 0.18) {
-          isYielding = true;
-          car.speed = 0; 
+      // 消防車逼近避讓
+      if (isTruckOnThisRoad && truckProgress < car.progress && (car.progress - truckProgress) < 0.18) {
+        isYielding = true;
+        car.speed = 0; 
+      } else {
+        // 正常排隊與煞車
+        if (i === 0) {
+          if (isRed && car.progress >= STOP_LINE) car.speed = 0;
+          else car.speed = car.baseSpeed;
         } else {
-          if (i === 0) {
-            if (isRed && car.progress >= STOP_LINE) car.speed = 0;
-            else car.speed = car.baseSpeed;
-          } else {
-            const frontCar = carsOnRoad[i - 1];
-            if (frontCar.progress - car.progress < 0.07 && frontCar.speed === 0) car.speed = 0;
-            else car.speed = car.baseSpeed;
-          }
-        }
-
-        car.progress += car.speed * (delta / 1000);
-        if (car.progress > STOP_LINE && car.speed === 0 && !isYielding) car.progress = STOP_LINE;
-
-        if (car.progress >= 1.0) {
-          car.sprite.destroy();
-          this.npcCars = this.npcCars.filter(c => c !== car);
-          continue;
-        }
-
-        const start = NODES[road.from];
-        const end = NODES[road.to];
-        if (start && end) {
-          let bx = start.x + (end.x - start.x) * car.progress;
-          let by = start.y + (end.y - start.y) * car.progress;
-
-          const angle = Math.atan2(end.y - start.y, end.x - start.x);
-          const sideOffset = isYielding ? 18 : 7;
-
-          car.sprite.x = bx + Math.sin(angle) * sideOffset;
-          car.sprite.y = by - Math.cos(angle) * sideOffset;
-          car.sprite.rotation = angle;
+          const frontCar = carsOnRoad[i - 1];
+          if (frontCar.progress - car.progress < 0.07 && frontCar.speed === 0) car.speed = 0;
+          else car.speed = car.baseSpeed;
         }
       }
-    });
-  }
 
+      // 更新進度
+      car.progress += car.speed * (delta / 1000);
+      if (car.progress > STOP_LINE && car.speed === 0 && !isYielding) car.progress = STOP_LINE;
+
+      // 如果超過終點，加入待銷毀清單
+      if (car.progress >= 1.0) {
+        carsToDestroy.push(car);
+        continue;
+      }
+
+      // 繪製與偏移座標
+      const start = NODES[road.from];
+      const end = NODES[road.to];
+      if (start && end) {
+        let bx = start.x + (end.x - start.x) * car.progress;
+        let by = start.y + (end.y - start.y) * car.progress;
+
+        const angle = Math.atan2(end.y - start.y, end.x - start.x);
+        const sideOffset = isYielding ? 18 : 7;
+
+        car.sprite.x = bx + Math.sin(angle) * sideOffset;
+        car.sprite.y = by - Math.cos(angle) * sideOffset;
+        car.sprite.rotation = angle;
+      }
+    }
+  });
+
+  // 2. 【安全執行點】等所有路網計算完畢，再統一拔除精靈與過濾陣列
+  if (carsToDestroy.length > 0) {
+    carsToDestroy.forEach(car => {
+      if (car.sprite) car.sprite.destroy();
+    });
+    this.npcCars = this.npcCars.filter(car => !carsToDestroy.includes(car));
+  }
+}
+  
   private updateTruck(dt: number) {
     if (this.truck.arrived || this.truckPath.length === 0) return;
 
