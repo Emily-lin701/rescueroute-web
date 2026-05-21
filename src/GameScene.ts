@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { NPCCar } from '../types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Constants
@@ -75,7 +76,8 @@ interface TruckState {
 //  GameScene
 // ─────────────────────────────────────────────────────────────────────────────
 export class GameScene extends Phaser.Scene {
-
+private npcCars: NPCCar[] = [];
+  
   // ── Game state ─────────────────────────────────────────────────────────────
   private gPhase: GamePhase = 'waiting';
   private gt        = 0;    // elapsed game time (seconds)
@@ -157,8 +159,39 @@ export class GameScene extends Phaser.Scene {
     this.buildOverlayTexts();
     this.setupInput();
     this.initGame();
+
+    // 💡 1. 呼叫產生一般車流的計時器
+    this.initTrafficSpawn();
   }
 
+  // 💡 2. 這是產生一般車流的具體實作
+  private initTrafficSpawn() {
+    this.time.addEvent({
+      delay: 2500, // 每 2.5 秒生出一輛私家車
+      callback: () => {
+        // 從起點 M1 Node 取得座標 (根據你原本定義的節點結構，如果是 this.nodes['M1'] 則依此類推)
+        // 這裡我們先用一個基礎圓點或你專案裡的 truck 代替私家車外觀
+        const m1Node = (this as any).nodes?.['M1'] || { x: 300, y: 384 }; // 備用防呆座標
+        
+        // 建立車子圖示，縮小一點、給它不一樣的顏色（例如灰色）
+        const carSprite = this.add.sprite(m1Node.x, m1Node.y, 'truck');
+        carSprite.setScale(0.5);
+        carSprite.setTint(0xaaaaaa);
+        carSprite.setDepth(2); // 跟消防車一樣放在 dynGfx 的深度層
+
+        const newCar: NPCCar = {
+          sprite: carSprite,
+          currentRoadId: 'R12', // 一律從 R12 開始走
+          progress: 0,
+          speed: 0.05,          // 測試用的前進速度
+          baseSpeed: 0.05
+        };
+        
+        this.npcCars.push(newCar);
+      },
+      loop: true
+    });
+  }
   // ─────────────────────────────────────────────────────────────────────────────
   //  INIT / RESTART
   // ─────────────────────────────────────────────────────────────────────────────
@@ -213,6 +246,64 @@ this.signals.M3 = {
       this.drawHUD();
       return;
     }
+
+    // 💡 1. 這裡會保留你原本 update 裡面的其他遊戲邏輯（例如更新消防車、時間、重繪畫面等）
+    // 請確認你原本這段 if (this.overlayVisible) 欄位下方還有沒有其他 code，如果有的話要留著喔！
+
+
+    // 💡 2. 在 update 結尾加入這行，讓私家車系統每影格都更新排隊
+    this.updateTraffic(delta);
+  }
+
+  // 💡 3. 這是私家車移動與紅燈排隊的具體實作
+  private updateTraffic(delta: number) {
+    // 找出所有在 R12 道路上的私家車，並依照進度 (progress) 從大到小排序（前面的車排在前面）
+    const r12Cars = this.npcCars.filter(car => car.currentRoadId === 'R12')
+                                .sort((a, b) => b.progress - a.progress);
+
+    // 檢查 M2 目前是不是紅燈（根據你專案中 signals.M2.phase 的結構）
+    const isM2Red = (this as any).signals?.M2?.phase === 'EW'; 
+
+    for (let i = 0; i < r12Cars.length; i++) {
+        const car = r12Cars[i];
+
+        if (i === 0) {
+            // -- 最前面的一台車 --
+            // 如果 M2 是紅燈，且車子已經接近路口停止線 (92%)
+            if (isM2Red && car.progress >= 0.92) {
+                car.speed = 0; // 停下
+            } else {
+                car.speed = car.baseSpeed; // 綠燈正常行駛
+            }
+        } else {
+            // -- 後面的車（排隊邏輯） --
+            const frontCar = r12Cars[i - 1];
+            // 如果跟前車距離太近 (< 0.05)，且前車已經停下了，自己也必須停下
+            if (frontCar.progress - car.progress < 0.05 && frontCar.speed === 0) {
+                car.speed = 0; // 前車停，我也停（形成回堵）
+            } else {
+                car.speed = car.baseSpeed; // 前方通暢，繼續前進
+            }
+        }
+
+        // 根據時間 (delta) 更新進度
+        car.progress += car.speed * (delta / 1000);
+        if (car.progress > 0.92 && car.speed === 0) car.progress = 0.92; // 鎖定在停止線
+        if (car.progress > 1.0) car.progress = 1.0;
+
+        // 💡 讓車子 Sprite 在網頁畫面上動起來的坐標計算
+        const road = (this as any).roads?.['R12']; // 取得 R12 道路資料
+        if (road) {
+            const start = (this as any).nodes[road.start];
+            const end = (this as any).nodes[road.end];
+            if (start && end) {
+                // 用線性內插 (Lerp) 算出車子目前進度應該在畫面的哪個 X, Y 上
+                car.sprite.x = start.x + (end.x - start.x) * car.progress;
+                car.sprite.y = start.y + (end.y - start.y) * car.progress;
+            }
+        }
+    }
+  }
 
     // ── Elapsed time & score penalty ────────────────────────────────────────
     this.gt    += dt;
