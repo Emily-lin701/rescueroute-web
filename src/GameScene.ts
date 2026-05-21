@@ -251,8 +251,15 @@ private npcCars: NPCCar[] = [];
       return;
     }
 
+    // ── Elapsed time & score penalty ────────────────────────────────────────
+    this.gt    += dt;
+    this.score -= 2 * dt; // 這裡原本是 PENALTY_SEC * dt，如果報錯可以先用 2 代替
+
     // 💡 執行私家車系統的移動與排隊更新
     this.updateTraffic(delta);
+
+    // 💡 這裡會觸發你原本專案的重繪 (如果原本有 drawHUD() 或 updateTruck() 記得留著)
+    this.drawHUD(); 
   }
 
   // 💡 私家車移動與紅燈排隊的具體實作
