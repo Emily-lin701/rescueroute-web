@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { NPCCar, TruckState, Phase, GamePhase, FireTarget } from './types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  型別宣告
