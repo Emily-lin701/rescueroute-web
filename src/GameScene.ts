@@ -1,8 +1,29 @@
 import Phaser from 'phaser';
-import { NPCCar, Phase, GamePhase, FireTarget, TruckState } from './types'; 
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  遊戲平衡常數
+//  直接內嵌型別，確保不會因為外部 import 漏掉而報錯
+// ─────────────────────────────────────────────────────────────────────────────
+export interface NPCCar {
+  sprite: Phaser.GameObjects.Rectangle;
+  currentRoadId: string;
+  progress: number;
+  speed: number;
+  baseSpeed: number;
+}
+
+export type Phase = 'NS' | 'EW';
+export type GamePhase = 'waiting' | 'fire_spawned' | 'dispatched' | 'success' | 'burned';
+export type FireTarget = 'S2' | 'S3';
+
+export interface TruckState {
+  segIdx: number;
+  progress: number;   
+  dispatched: boolean;
+  arrived: boolean;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  遊戲平衡與地圖資料
 // ─────────────────────────────────────────────────────────────────────────────
 const W = 1024;
 const H = 768;
@@ -26,9 +47,6 @@ const PENALTY_BURN  = 300;
 const CAR_SPAWN_T   = 1.2;  
 const CAR_SPEED     = 0.14; 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  地圖路網資料 (雙向十字路口)
-// ─────────────────────────────────────────────────────────────────────────────
 const NODES: Record<string, { x: number; y: number }> = {
   M1: { x: 330, y: 345 },
   M2: { x: 510, y: 345 },
@@ -71,7 +89,7 @@ const ENTRY_SIGNAL: Record<string, { junc: 'M2' | 'M3'; phase: 'NS' | 'EW' }> = 
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  GameScene 核心場景
+//  主場景類別
 // ─────────────────────────────────────────────────────────────────────────────
 export class GameScene extends Phaser.Scene {
   private gPhase: GamePhase = 'waiting';
@@ -90,7 +108,6 @@ export class GameScene extends Phaser.Scene {
 
   private truck: TruckState = { segIdx: 0, progress: 0, dispatched: false, arrived: false };
   private truckPath: string[] = [];
-
   private npcCars: NPCCar[] = [];
   private trafficEvent: Phaser.Time.TimerEvent | null = null;
 
@@ -144,7 +161,6 @@ export class GameScene extends Phaser.Scene {
     this.buildOverlayTexts();
     this.setupInput();
     this.initGame();
-
     this.initTrafficSpawn();
   }
 
@@ -157,7 +173,7 @@ export class GameScene extends Phaser.Scene {
         const spawnRoutes = ['R12_E', 'R43_W', 'RN2_S', 'RS2_N', 'RN3_S', 'RS3_N'];
         const chosenRoadId = Phaser.Utils.Array.GetRandom(spawnRoutes);
         const road = ROADS[chosenRoadId];
-        const startNode = NODES[road.from];
+        const startNode = NODES[road?.from];
         
         if (startNode) {
           const isMainline = road.mainline;
@@ -271,93 +287,82 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateTraffic(delta: number) {
-  if (!this.npcCars || this.npcCars.length === 0) return;
+    if (!this.npcCars || this.npcCars.length === 0) return;
 
-  // 1. 先找出目前有哪些道路上有車
-  const activeRoadIds = Array.from(new Set(this.npcCars.map(car => car.currentRoadId)));
-  
-  // 用來記錄這一幀有哪些車子該被銷毀，避免在迴圈中直接更動陣列
-  const carsToDestroy: NPCCar[] = [];
+    const activeRoadIds = Array.from(new Set(this.npcCars.map(car => car.currentRoadId)));
+    const carsToDestroy: NPCCar[] = [];
 
-  activeRoadIds.forEach(roadId => {
-    // 篩選出該車道的車，並由遠到近排序
-    const carsOnRoad = this.npcCars.filter(car => car.currentRoadId === roadId)
-                                   .sort((a, b) => b.progress - a.progress);
+    activeRoadIds.forEach(roadId => {
+      const carsOnRoad = this.npcCars.filter(car => car.currentRoadId === roadId)
+                                     .sort((a, b) => b.progress - a.progress);
 
-    const road = ROADS[roadId];
-    if (!road) return;
+      const road = ROADS[roadId];
+      if (!road) return;
 
-    const isTruckOnThisRoad = this.truck.dispatched && !this.truck.arrived && this.truckPath[this.truck.segIdx] === roadId;
-    const truckProgress = this.truck.progress;
+      const isTruckOnThisRoad = this.truck.dispatched && !this.truck.arrived && this.truckPath[this.truck.segIdx] === roadId;
+      const truckProgress = this.truck.progress;
 
-    // 紅燈判定
-    let isRed = false;
-    const nextPossibleSegs = Object.keys(ENTRY_SIGNAL).filter(key => key.startsWith(`${roadId}→`));
-    if (nextPossibleSegs.length > 0) {
-      const nextSegKey = nextPossibleSegs[0];
-      const req = ENTRY_SIGNAL[nextSegKey];
-      const s = this.signals[req.junc];
-      isRed = s.transitioning || s.phase !== req.phase;
-    }
-
-    for (let i = 0; i < carsOnRoad.length; i++) {
-      const car = carsOnRoad[i];
-      let isYielding = false; 
-
-      // 消防車逼近避讓
-      if (isTruckOnThisRoad && truckProgress < car.progress && (car.progress - truckProgress) < 0.18) {
-        isYielding = true;
-        car.speed = 0; 
-      } else {
-        // 正常排隊與煞車
-        if (i === 0) {
-          if (isRed && car.progress >= STOP_LINE) car.speed = 0;
-          else car.speed = car.baseSpeed;
-        } else {
-          const frontCar = carsOnRoad[i - 1];
-          if (frontCar.progress - car.progress < 0.07 && frontCar.speed === 0) car.speed = 0;
-          else car.speed = car.baseSpeed;
+      let isRed = false;
+      const nextPossibleSegs = Object.keys(ENTRY_SIGNAL).filter(key => key.startsWith(`${roadId}→`));
+      if (nextPossibleSegs.length > 0) {
+        const nextSegKey = nextPossibleSegs[0];
+        const req = ENTRY_SIGNAL[nextSegKey];
+        if (req) {
+          const s = this.signals[req.junc];
+          isRed = s.transitioning || s.phase !== req.phase;
         }
       }
 
-      // 更新進度
-      car.progress += car.speed * (delta / 1000);
-      if (car.progress > STOP_LINE && car.speed === 0 && !isYielding) car.progress = STOP_LINE;
+      for (let i = 0; i < carsOnRoad.length; i++) {
+        const car = carsOnRoad[i];
+        let isYielding = false; 
 
-      // 如果超過終點，加入待銷毀清單
-      if (car.progress >= 1.0) {
-        carsToDestroy.push(car);
-        continue;
+        if (isTruckOnThisRoad && truckProgress < car.progress && (car.progress - truckProgress) < 0.18) {
+          isYielding = true;
+          car.speed = 0; 
+        } else {
+          if (i === 0) {
+            if (isRed && car.progress >= STOP_LINE) car.speed = 0;
+            else car.speed = car.baseSpeed;
+          } else {
+            const frontCar = carsOnRoad[i - 1];
+            if (frontCar && frontCar.progress - car.progress < 0.07 && frontCar.speed === 0) car.speed = 0;
+            else car.speed = car.baseSpeed;
+          }
+        }
+
+        car.progress += car.speed * (delta / 1000);
+        if (car.progress > STOP_LINE && car.speed === 0 && !isYielding) car.progress = STOP_LINE;
+
+        if (car.progress >= 1.0) {
+          carsToDestroy.push(car);
+          continue;
+        }
+
+        const start = NODES[road.from];
+        const end = NODES[road.to];
+        if (start && end) {
+          let bx = start.x + (end.x - start.x) * car.progress;
+          let by = start.y + (end.y - start.y) * car.progress;
+
+          const angle = Math.atan2(end.y - start.y, end.x - start.x);
+          const sideOffset = isYielding ? 18 : 7;
+
+          car.sprite.x = bx + Math.sin(angle) * sideOffset;
+          car.sprite.y = by - Math.cos(angle) * sideOffset;
+          car.sprite.rotation = angle;
+        }
       }
-
-      // 繪製與偏移座標
-      const start = NODES[road.from];
-      const end = NODES[road.to];
-      if (start && end) {
-        let bx = start.x + (end.x - start.x) * car.progress;
-        let by = start.y + (end.y - start.y) * car.progress;
-
-        const angle = Math.atan2(end.y - start.y, end.x - start.x);
-        const sideOffset = isYielding ? 18 : 7;
-
-        car.sprite.x = bx + Math.sin(angle) * sideOffset;
-        car.sprite.y = by - Math.cos(angle) * sideOffset;
-        car.sprite.rotation = angle;
-      }
-    }
-  });
-
-  // 2. 【安全執行點】等所有路網計算完畢，再統一拔除精靈與過濾陣列
-  if (carsToDestroy.length > 0) {
-    carsToDestroy.forEach(car => {
-      if (car.sprite) car.sprite.destroy();
     });
-    this.npcCars = this.npcCars.filter(car => !carsToDestroy.includes(car));
+
+    if (carsToDestroy.length > 0) {
+      carsToDestroy.forEach(car => { if (car.sprite) car.sprite.destroy(); });
+      this.npcCars = this.npcCars.filter(car => !carsToDestroy.includes(car));
+    }
   }
-}
-  
+
   private updateTruck(dt: number) {
-    if (this.truck.arrived || this.truckPath.length === 0) return;
+    if (!this.truck.dispatched || this.truck.arrived || this.truckPath.length === 0 || this.truck.segIdx >= this.truckPath.length) return;
 
     const seg     = this.truckPath[this.truck.segIdx];
     const nextSeg = this.truck.segIdx + 1 < this.truckPath.length ? this.truckPath[this.truck.segIdx + 1] : null;
@@ -380,7 +385,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     const atStop   = this.truck.progress >= STOP_LINE && nextSeg !== null;
-    const blocked  = atStop && !this.canEnter(seg, nextSeg!);
+    const blocked  = atStop && nextSeg !== null && !this.canEnter(seg, nextSeg);
 
     if (!blocked) {
       let currentSpeed = this.getTruckSpeed(seg);
@@ -389,8 +394,10 @@ export class GameScene extends Phaser.Scene {
         currentSpeed *= 0.35; 
       }
 
-      const len = this.segLen(seg);
+      const len = Math.max(1, this.segLen(seg));
       this.truck.progress += (currentSpeed * dt) / len;
+
+      if (isNaN(this.truck.progress)) this.truck.progress = 0;
 
       if (this.truck.progress >= 1.0) {
         if (nextSeg !== null) {
@@ -421,29 +428,35 @@ export class GameScene extends Phaser.Scene {
   private canEnter(prevSeg: string, nextSeg: string): boolean {
     const key = `${prevSeg}→${nextSeg}`;
     const req = ENTRY_SIGNAL[key];
-    if (!req) return true;
+    if (!req) return true; // 🛡️ 關鍵防護：如果沒設定對應號誌（例如末段），直接允許通行，不拋錯
     const s = this.signals[req.junc];
-    return !s.transitioning && s.phase === req.phase;
+    return s ? (!s.transitioning && s.phase === req.phase) : true;
   }
 
   private getTruckSpeed(segId: string): number {
-    return TRUCK_SPEED * (this.gwActive && ROADS[segId].mainline ? GW_MULT : 1);
+    const r = ROADS[segId];
+    if (!r) return TRUCK_SPEED;
+    return TRUCK_SPEED * (this.gwActive && r.mainline ? GW_MULT : 1);
   }
 
   private segLen(segId: string): number {
     const r = ROADS[segId];
     if (!r) return 1;
     const a = NODES[r.from], b = NODES[r.to];
+    if (!a || !b) return 1;
     return Math.hypot(b.x - a.x, b.y - a.y);
   }
 
   private truckPos(): { x: number; y: number; angle: number } {
-    if (!this.truck.dispatched || this.truckPath.length === 0) return { x: NODES.M1.x, y: NODES.M1.y, angle: 0 };
+    if (!this.truck.dispatched || this.truckPath.length === 0 || this.truck.segIdx >= this.truckPath.length) {
+      return { x: NODES.M1.x, y: NODES.M1.y, angle: 0 };
+    }
     const seg  = this.truckPath[this.truck.segIdx];
     const road = ROADS[seg];
     if (!road) return { x: NODES.M1.x, y: NODES.M1.y, angle: 0 };
     const a    = NODES[road.from], b = NODES[road.to];
-    const t    = Math.min(this.truck.progress, 1);
+    if (!a || !b) return { x: NODES.M1.x, y: NODES.M1.y, angle: 0 };
+    const t    = Math.min(Math.max(0, this.truck.progress), 1);
     return {
       x:     a.x + (b.x - a.x) * t,
       y:     a.y + (b.y - a.y) * t,
@@ -494,6 +507,7 @@ export class GameScene extends Phaser.Scene {
 
     for (const road of Object.values(ROADS)) {
       const a = NODES[road.from], b = NODES[road.to];
+      if(!a || !b) continue;
       g.lineStyle(16, 0x2e2e3d, 1); 
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.strokePath();
       
@@ -512,7 +526,7 @@ export class GameScene extends Phaser.Scene {
 
     for (const id of ['S2', 'S3']) {
       const n = NODES[id];
-      this.add.text(n.x, n.y + 32, '🚒', { fontSize: '18px' }).setOrigin(0.5);
+      if (n) this.add.text(n.x, n.y + 32, '🚒', { fontSize: '18px' }).setOrigin(0.5);
     }
   }
 
@@ -536,11 +550,11 @@ export class GameScene extends Phaser.Scene {
 
       const activeColor = '#88ffaa', inactiveColor = '#4a5a7a';
       if (junc === 'M2') {
-        this.sigTxtM2ns.setColor(nsGreen ? activeColor : inactiveColor);
-        this.sigTxtM2ew.setColor(ewGreen ? activeColor : inactiveColor);
+        if(this.sigTxtM2ns) this.sigTxtM2ns.setColor(nsGreen ? activeColor : inactiveColor);
+        if(this.sigTxtM2ew) this.sigTxtM2ew.setColor(ewGreen ? activeColor : inactiveColor);
       } else {
-        this.sigTxtM3ns.setColor(nsGreen ? activeColor : inactiveColor);
-        this.sigTxtM3ew.setColor(ewGreen ? activeColor : inactiveColor);
+        if(this.sigTxtM3ns) this.sigTxtM3ns.setColor(nsGreen ? activeColor : inactiveColor);
+        if(this.sigTxtM3ew) this.sigTxtM3ew.setColor(ewGreen ? activeColor : inactiveColor);
       }
     }
   }
@@ -552,6 +566,7 @@ export class GameScene extends Phaser.Scene {
 
   private drawFire() {
     const g = this.dynGfx; const node = NODES[this.fireTarget]; const pulse = (Math.sin(this.gt * 4) + 1) / 2;
+    if (!node) return;
     g.fillStyle(0xff3300, 0.15 + pulse * 0.12); g.fillCircle(node.x, node.y, 35);
     g.fillStyle(0xff4400, 0.9); g.fillCircle(node.x, node.y, 10);
     if (this.fireValue > 0) {
@@ -561,7 +576,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawTruck() {
-    if (this.truckPath.length === 0) return;
+    if (!this.truck.dispatched || this.truckPath.length === 0 || this.truck.segIdx >= this.truckPath.length) return;
     const g = this.dynGfx; const { x, y, angle } = this.truckPos();
     const rx = x + Math.sin(angle) * 7;
     const ry = y - Math.cos(angle) * 7;
@@ -639,25 +654,35 @@ export class GameScene extends Phaser.Scene {
     for (const y of divY) g.lineBetween(8, y, HUD_W - 8, y);
 
     const timeLeft = Math.max(0, FIRE_DEADLINE - this.gt);
-    this.txtTime.setText(`${Math.floor(timeLeft / 60)}:${Math.floor(timeLeft % 60).toString().padStart(2, '0')}`);
-    this.txtScore.setText(Math.round(this.score).toString());
+    if(this.txtTime) this.txtTime.setText(`${Math.floor(timeLeft / 60)}:${Math.floor(timeLeft % 60).toString().padStart(2, '0')}`);
+    if(this.txtScore) this.txtScore.setText(Math.round(this.score).toString());
 
     const cmdFrac = this.cmdPts / CMD_MAX;
     g.fillStyle(0x0a1830, 1); g.fillRoundedRect(12, 198, HUD_W - 28, 10, 4);
     g.fillStyle(cmdFrac < 0.3 ? 0xff6644 : 0x44aaff, 1); g.fillRoundedRect(12, 198, (HUD_W - 28) * cmdFrac, 10, 4);
-    this.txtCmd.setText(`${this.cmdPts.toFixed(1)} / ${CMD_MAX}`);
+    if(this.txtCmd) this.txtCmd.setText(`${this.cmdPts.toFixed(1)} / ${CMD_MAX}`);
 
-    if (this.gwActive) this.txtGW.setText(`ACTIVE  ${this.gwTimer.toFixed(1)}s`).setColor('#44ff88');
-    else this.txtGW.setText(this.cmdPts < GW_COST ? `NO POINTS (need ${GW_COST})` : 'READY').setColor(this.cmdPts < GW_COST ? '#ff6644' : '#88ee88');
+    if (this.gwActive) {
+      if(this.txtGW) this.txtGW.setText(`ACTIVE  ${this.gwTimer.toFixed(1)}s`).setColor('#44ff88');
+    } else {
+      if(this.txtGW) this.txtGW.setText(this.cmdPts < GW_COST ? `NO POINTS (need ${GW_COST})` : 'READY').setColor(this.cmdPts < GW_COST ? '#ff6644' : '#88ee88');
+    }
 
-    if (this.gPhase === 'waiting') { this.txtFire.setText('Standing by…').setColor('#6a8aaa'); this.txtHint.setText(''); }
-    else if (this.gPhase === 'fire_spawned') { this.txtFire.setText(`🔥 Fire @ ${this.fireTarget}`).setColor('#ff9944'); this.txtHint.setText('▶ Press ENTER to dispatch truck!').setColor('#ffee44'); }
-    else if (this.gPhase === 'dispatched') { this.txtFire.setText(`🔥 Fire @ ${this.fireTarget}`).setColor('#ff6622'); this.txtHint.setText(''); }
+    if (this.gPhase === 'waiting') { 
+      if(this.txtFire) this.txtFire.setText('Standing by…').setColor('#6a8aaa'); 
+      if(this.txtHint) this.txtHint.setText(''); 
+    } else if (this.gPhase === 'fire_spawned') { 
+      if(this.txtFire) this.txtFire.setText(`🔥 Fire @ ${this.fireTarget}`).setColor('#ff9944'); 
+      if(this.txtHint) this.txtHint.setText('▶ Press ENTER to dispatch truck!').setColor('#ffee44'); 
+    } else if (this.gPhase === 'dispatched') { 
+      if(this.txtFire) this.txtFire.setText(`🔥 Fire @ ${this.fireTarget}`).setColor('#ff6622'); 
+      if(this.txtHint) this.txtHint.setText(''); 
+    }
 
     const m2Status = this.signals.M2.lockedByTruck ? ' 🚒 PRIORITY' : (this.signals.M2.transitioning ? ' (ALL-RED)' : '');
     const m3Status = this.signals.M3.lockedByTruck ? ' 🚒 PRIORITY' : (this.signals.M3.transitioning ? ' (ALL-RED)' : '');
-    this.txtM2.setText(`[1] M2 — ${this.signals.M2.phase}${m2Status}`);
-    this.txtM3.setText(`[2] M3 — ${this.signals.M3.phase}${m3Status}`);
+    if(this.txtM2) this.txtM2.setText(`[1] M2 — ${this.signals.M2.phase}${m2Status}`);
+    if(this.txtM3) this.txtM3.setText(`[2] M3 — ${this.signals.M3.phase}${m3Status}`);
   }
 
   private showOverlay(title: string, sub: string, tintColor: number) {
@@ -666,3 +691,4 @@ export class GameScene extends Phaser.Scene {
     this.overlayVisible = true; this.restartTimer = 4;
   }
 }
+
