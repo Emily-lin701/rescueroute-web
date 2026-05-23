@@ -454,15 +454,16 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private handleInput() {
-    const down1 = this.k1.isDown; const down2 = this.k2.isDown;
-    const downG = this.kG.isDown; const downE = this.kEnter.isDown;
-    if (down1 && !this.k1Prev) this.toggleSignal('M2')
-    if (down2 && !this.k2Prev) this.toggleSignal('M3')
-    if (downG && !this.kGPrev) this.activateGreenWave()
-    if (downE && !this.kEPrev && this.gPhase === 'fire_spawned') this.dispatchTruck()
-    this.k1Prev = down1; this.k2Prev = down2; this.kGPrev = downG; this.kEPrev = downE
-  }
+ private handleInput() {
+  console.log('handleInput called, gPhase:', this.gPhase)  // ⬅️ 加這行
+  const down1 = this.k1.isDown; const down2 = this.k2.isDown;
+  const downG = this.kG.isDown; const downE = this.kEnter.isDown;
+  if (down1 && !this.k1Prev) this.toggleSignal('M2')
+  if (down2 && !this.k2Prev) this.toggleSignal('M3')
+  if (downG && !this.kGPrev) this.activateGreenWave()
+  if (downE && !this.kEPrev && this.gPhase === 'fire_spawned') this.dispatchTruck()
+  this.k1Prev = down1; this.k2Prev = down2; this.kGPrev = downG; this.kEPrev = downE
+}
   
   private toggleSignal(junc: 'M2' | 'M3') {
     const s = this.signals[junc]
