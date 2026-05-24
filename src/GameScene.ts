@@ -1,6 +1,10 @@
 import Phaser from 'phaser'
 import { NPCCar, TruckState, Phase, GamePhase, FireTarget } from './types'
 
+// ──────────────────────────────────────────────────────────────
+// 地圖、路口、道路定義
+// ──────────────────────────────────────────────────────────────
+
 const W = 1024
 const H = 768
 const HUD_W = 248
@@ -62,6 +66,10 @@ const ENTRY_SIGNAL: Record<string, { junc: 'M2' | 'M3'; phase: Phase }> = {
   'RN3_S→R3S_S': { junc: 'M3', phase: 'NS' },
   'RS3_N→R3N_N': { junc: 'M3', phase: 'NS' },
 }
+
+// ──────────────────────────────────────────────────────────────
+// 主遊戲場景
+// ──────────────────────────────────────────────────────────────
 
 export class GameScene extends Phaser.Scene {
   private gPhase: GamePhase = 'waiting'
@@ -228,9 +236,9 @@ export class GameScene extends Phaser.Scene {
       if (s.transitioning) {
         s.transTimer += dt
         if (s.transTimer >= ALLRED_DUR) {
-          s.phase         = s.nextPhase
+          s.phase        = s.nextPhase
           s.transitioning = false
-          s.transTimer    = 0
+          s.transTimer   = 0
         }
       }
     }
@@ -574,6 +582,7 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // ✅ 修復：改用手動旋轉矩陣，不再使用 g.save/translate/rotate（Phaser Graphics 不支援）
   private drawTruck() {
     if (!this.truck.dispatched || this.truckPath.length === 0 || this.truck.segIdx >= this.truckPath.length) return
     const g = this.dynGfx
@@ -682,8 +691,8 @@ export class GameScene extends Phaser.Scene {
     if (this.txtScore) this.txtScore.setText(Math.round(this.score).toString())
 
     const cmdFrac = this.cmdPts / CMD_MAX
-    g.fillStyle(0x0a1830, 1);                             g.fillRoundedRect(12, 198, HUD_W - 28, 10, 4)
-    g.fillStyle(cmdFrac < 0.3 ? 0xff6644 : 0x44aaff, 1); g.fillRoundedRect(12, 198, (HUD_W - 28) * cmdFrac, 10, 4)
+    g.fillStyle(0x0a1830, 1);                                          g.fillRoundedRect(12, 198, HUD_W - 28, 10, 4)
+    g.fillStyle(cmdFrac < 0.3 ? 0xff6644 : 0x44aaff, 1);              g.fillRoundedRect(12, 198, (HUD_W - 28) * cmdFrac, 10, 4)
     if (this.txtCmd) this.txtCmd.setText(`${this.cmdPts.toFixed(1)} / ${CMD_MAX}`)
 
     if (this.gwActive) {
